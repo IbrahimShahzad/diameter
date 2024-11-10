@@ -3,59 +3,6 @@ package message
 
 import "errors"
 
-// AVP Codes
-const (
-	AVP_CODE_SESSION_ID          = uint32(263)
-	AVP_CODE_ORIGIN_HOST         = uint32(264)
-	AVP_CODE_ORIGIN_REALM        = uint32(296)
-	AVP_CODE_HOST_IP_ADDRESS     = uint32(257)
-	AVP_CODE_VENDOR_ID           = uint32(266)
-	AVP_CODE_PRODUCT_NAME        = uint32(269)
-	AVP_CODE_ORIGIN_STATE_ID     = uint32(278)
-	AVP_CODE_RESULT_CODE         = uint32(268)
-	AVP_CODE_ERROR_MESSAGE       = uint32(281)
-	AVP_CODE_EXPERIMENTAL_RESULT = uint32(297)
-	AVP_CODE_FAILED_AVP          = uint32(279)
-)
-
-var AVPCodeToName map[uint32]string = map[uint32]string{
-	AVP_CODE_SESSION_ID:          "Session-Id",
-	AVP_CODE_ORIGIN_HOST:         "Origin-Host",
-	AVP_CODE_ORIGIN_REALM:        "Origin-Realm",
-	AVP_CODE_HOST_IP_ADDRESS:     "Host-IP-Address",
-	AVP_CODE_VENDOR_ID:           "Vendor-Id",
-	AVP_CODE_PRODUCT_NAME:        "Product-Name",
-	AVP_CODE_ORIGIN_STATE_ID:     "Origin-State-Id",
-	AVP_CODE_RESULT_CODE:         "Result-Code",
-	AVP_CODE_ERROR_MESSAGE:       "Error-Message",
-	AVP_CODE_EXPERIMENTAL_RESULT: "Experimental-Result",
-	AVP_CODE_FAILED_AVP:          "Failed-AVP",
-}
-
-func GetAVPCodeFromName(name string) uint32 {
-	if code, ok := AVPNameToCode[name]; ok {
-		return code
-	}
-	return 0
-}
-
-var AVPNameToCode map[string]uint32 = map[string]uint32{
-	"Origin-Host":         AVP_CODE_ORIGIN_HOST,
-	"Origin-Realm":        AVP_CODE_ORIGIN_REALM,
-	"Host-IP-Address":     AVP_CODE_HOST_IP_ADDRESS,
-	"Vendor-Id":           AVP_CODE_VENDOR_ID,
-	"Product-Name":        AVP_CODE_PRODUCT_NAME,
-	"Origin-State-Id":     AVP_CODE_ORIGIN_STATE_ID,
-	"Result-Code":         AVP_CODE_RESULT_CODE,
-	"Error-Message":       AVP_CODE_ERROR_MESSAGE,
-	"Experimental-Result": AVP_CODE_EXPERIMENTAL_RESULT,
-	"Failed-AVP":          AVP_CODE_FAILED_AVP,
-}
-
-func GetAVPNameFromCode(code uint32) string {
-	return AVPCodeToName[code]
-}
-
 type ResultCode uint32
 
 const (
@@ -162,7 +109,7 @@ var ResultCodeToName map[ResultCode]string = map[ResultCode]string{
 func GetResultCode(msg *DiameterMessage) (ResultCode, string, error) {
 	// TODO: check for error bit
 	for _, avp := range msg.AVPs {
-		if avp.Code == AVP_CODE_RESULT_CODE {
+		if avp.Code == AVP_RESULT_CODE {
 			if value, ok := avp.Data.(*Unsigned32); ok {
 				return ResultCode(value.Data), ResultCodeToName[ResultCode(value.Data)], nil
 			}

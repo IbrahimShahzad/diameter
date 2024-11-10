@@ -54,6 +54,7 @@ type AVPData interface {
 	Decode(data []byte) error
 	Length() uint32
 	String() string
+	SetData(data interface{}) error
 }
 
 func (a *AVP) Length() uint32 {
@@ -62,9 +63,8 @@ func (a *AVP) Length() uint32 {
 
 func (a *AVP) String() string {
 	return fmt.Sprintf(
-		"AVP{Code: %d (%s), Flags: %d, Length: %d, VendorID: %d, Data: %s}",
+		"AVP{Code: %d, Flags: %d, Length: %d, VendorID: %d, Data: %s}",
 		a.Code,
-		GetAVPNameFromCode(a.Code),
 		a.Flags,
 		a.AVPlength,
 		a.VendorID,
@@ -169,35 +169,15 @@ func NewAVP[T constraints.Ordered | net.IP](
 	if flag&VENDOR_FLAG != 0 {
 		headerLen = AVPHeaderLengthWithV
 	}
-	var data AVPData
-	switch v := any(value).(type) {
-	case net.IP:
-		data = &IPAddr{
-			isIPv4: v.To4() != nil,
-			Data:   v,
-		}
-	case string:
-		var min_length uint32
-		if flag&PROTECTED_FLAG != 0 {
-			min_length = AVP_PROTECTED_LENGTH
-		} else {
-			min_length = AVP_UNPROTECTED_LENGTH
-		}
-		data = &OctetString{Data: []byte(v), min_length: min_length}
-	case int32:
-		data = &Integer32{Data: v}
-	case int64:
-		data = &Integer64{Data: v}
-	case uint32:
-		data = &Unsigned32{Data: v}
-	case uint64:
-		data = &Unsigned64{Data: v}
-	case *AVP:
-		data = v
-	case *Grouped:
-		data = v
-	default:
-		errors.Join(UnsupportedTypeError, fmt.Errorf("%T", value))
+
+	f, ok := avpTypeMap[code]
+	if !ok {
+		return nil, errors.New("Unsupported AVP code")
+	}
+	// This is cool
+	data := f()
+	if err := data.SetData(value); err != nil {
+		return nil, err
 	}
 
 	length := uint32(headerLen) + data.Length()
@@ -250,17 +230,7 @@ func extractAVPs(data []byte) ([]*AVP, error) {
 
 // get AVP with either name or code based on type of input
 // using generic input type to allow for either string or uint32
-func (msg *DiameterMessage) GetAVP(input interface{}) *AVP {
-	var code uint32
-	switch input.(type) {
-	case string:
-		code = GetAVPCodeFromName(input.(string))
-	case uint32:
-		code = input.(uint32)
-	default:
-		return nil
-	}
-
+func (msg *DiameterMessage) GetAVP(code uint32) *AVP {
 	for _, avp := range msg.AVPs {
 		if avp.Code == code {
 			return avp
