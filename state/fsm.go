@@ -58,6 +58,11 @@ func (f *FSM) AddTransition(from State, to State, event Event, action ActionFunc
 	}
 }
 
+// Trigger attempts to transition the FSM to a new state based on the given event.
+// It locks the FSM to ensure thread safety, checks for a valid transition from the current state,
+// executes the associated action if any, and updates the FSM's state.
+//
+// Returns an error if no transition is registered for the current state or event, or if the action fails.
 func (f *FSM) Trigger(event Event) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -86,8 +91,16 @@ func (f *FSM) Trigger(event Event) error {
 	return nil
 }
 
+// GetState returns the current state of the FSM.
+// It locks the FSM to ensure thread safety before accessing the state.
 func (f *FSM) GetState() State {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.state
+}
+
+func (f *FSM) SetState(s State) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.state = s
 }

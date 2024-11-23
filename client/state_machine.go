@@ -4,6 +4,7 @@ package client
 import (
 	"log"
 
+	"github.com/IbrahimShahzad/diameter/message"
 	fsm "github.com/IbrahimShahzad/diameter/state"
 )
 
@@ -39,55 +40,62 @@ func (c *Client) InitializeFSM() {
 	c.fsm = fsm.NewFSM(StateClosed)
 
 	// State: Closed
-	c.fsm.AddTransition(StateClosed, StateClosed, EventStart, func() error {
-		c.sendConnRequest()
+	c.fsm.AddTransition(StateClosed, StateWaitConnAck, EventStart, c.sendConnRequest)
+
+	// State: Wait-Conn-Ack
+	c.fsm.AddTransition(StateWaitConnAck, StateWaitCEA, EventConnAck, c.sendCER)
+
+	c.fsm.AddTransition(StateWaitConnAck, StateClosed, EventConnNack, c.cleanup)
+	c.fsm.AddTransition(StateWaitConnAck, StateClosed, EventTimeout, c.cleanup)
+
+	// State: Wait-CEA
+	c.fsm.AddTransition(StateWaitCEA, StateIOpen, EventCEAReceived, func() error {
+		c.startWatchdog()
 		return nil
 	})
 
-	// State: Wait-Conn-Ack
-	// TODO: Fix the transitions
-	// c.fsm.AddTransition(StateWaitConnAck, StateIOpen, EventConnAck, StateWaitCEA, func() error {
-	// 	c.sendCER()
-	// 	return nil
-	// })
-	// c.fsm.AddTransition(StateWaitConnAck, EventConnNack, StateClosed, c.cleanup)
-	// c.fsm.AddTransition(StateWaitConnAck, EventTimeout, StateClosed, c.handleError)
-	//
-	// // State: Wait-CEA
-	// c.fsm.AddTransition(StateWaitCEA, EventCEAReceived, StateIOpen, func() {
-	// 	c.startWatchdog()
-	// })
-	// c.fsm.AddTransition(StateWaitCEA, EventNonCEAReceived, StateClosed, c.handleError)
-	// c.fsm.AddTransition(StateWaitCEA, EventTimeout, StateClosed, c.handleError)
-	//
-	// // State: I-Open
-	// c.fsm.AddTransition(StateIOpen, EventSendMessage, StateIOpen, c.sendMessage)
-	// c.fsm.AddTransition(StateIOpen, EventReceiveDWR, StateIOpen, func() {
-	// 	c.sendDWA()
-	// })
-	// c.fsm.AddTransition(StateIOpen, EventDisconnect, StateClosing, func() {
-	// 	c.sendDPR()
-	// })
-	// c.fsm.AddTransition(StateIOpen, EventReceiveDPR, StateClosing, func() {
-	// 	c.sendDPA()
-	// 	c.cleanup()
-	// })
-	//
-	// // State: Closing
-	// c.fsm.AddTransition(StateClosing, EventReceiveDPA, StateClosed, c.cleanup)
-	// c.fsm.AddTransition(StateClosing, EventTimeout, StateClosed, c.cleanup)
+	c.fsm.AddTransition(StateWaitCEA, StateClosed, EventNonCEAReceived, c.cleanup)
+	c.fsm.AddTransition(StateWaitCEA, StateClosed, EventTimeout, c.cleanup)
+
+	// State: I-Open
+	c.fsm.AddTransition(StateIOpen, StateIOpen, EventSendMessage, c.sendMessage)
+	c.fsm.AddTransition(StateIOpen, StateIOpen, EventReceiveDWR, c.sendDWA)
+	c.fsm.AddTransition(StateIOpen, StateClosing, EventDisconnect, func() error {
+		c.sendDPR()
+		c.cleanup()
+		return nil
+	})
+	c.fsm.AddTransition(StateIOpen, StateClosing, EventReceiveDPR, func() error {
+		c.sendDPA()
+		c.cleanup()
+		return nil
+	})
+
+	// State: Closing
+	c.fsm.AddTransition(StateClosing, StateClosed, EventReceiveDPA, c.cleanup)
+	c.fsm.AddTransition(StateClosing, StateClosed, EventTimeout, c.cleanup)
 }
 
 // Helper functions for transitions
 
-func (c *Client) sendConnRequest() {
+func (c *Client) sendConnRequest() error {
 	log.Println("Sending connection request to server.")
-	// TODO: Code to initiate the connection
+	return c.Connect()
 }
 
-func (c *Client) sendCER() {
+func (c *Client) sendCER() error {
 	log.Println("Sending Capabilities-Exchange-Request (CER) to server.")
-	// TODO: Code to send a CER message
+	message, err := message.NewCER()
+	if err != nil {
+		log.Printf("Error creating CER message: %v", err)
+		return err
+	}
+	c.SendMessage(message)
+	if err := c.fsm.Trigger(EventCEAReceived); err != nil {
+		log.Printf("Error triggering CEAReceived event: %v", err)
+		return err
+	}
+	return nil
 }
 
 func (c *Client) startWatchdog() {
@@ -95,14 +103,33 @@ func (c *Client) startWatchdog() {
 	// TODO: Code to start Watchdog timer and send DWR periodically
 }
 
-func (c *Client) sendMessage() {
+// sendMessage sends a Diameter message to the server.
+// The message is taken from the client's message queue.
+func (c *Client) sendMessage() error {
 	log.Println("Sending Diameter message.")
-	// TODO: Code to send a Diameter message
+	for msg := range c.messageQueue {
+		if state := c.fsm.GetState(); state != StateIOpen {
+			log.Printf("Client not in open state. Current state: %v", state)
+			break
+		}
+		encodedMsg, err := msg.Encode()
+		if err != nil {
+			log.Printf("Error encoding message: %v", err)
+			return err
+		}
+		_, err = c.conn.Write(encodedMsg)
+		if err != nil {
+			log.Printf("Error sending message: %v", err)
+			return err
+		}
+	}
+	return nil
 }
 
-func (c *Client) sendDWA() {
+func (c *Client) sendDWA() error {
 	log.Println("Sending Diameter Watchdog Answer (DWA) in response to DWR.")
 	// TODO: Code to send a DWA message
+	return nil
 }
 
 func (c *Client) sendDPR() {
@@ -117,12 +144,19 @@ func (c *Client) sendDPA() {
 
 func (c *Client) cleanup() error {
 	log.Println("Cleaning up resources and resetting client state.")
-	// TODO: Code to close connection and reset resources
+	if c.conn != nil {
+		c.conn.Close()
+	}
+	c.fsm.SetState(StateClosed)
+	// reset message queue
+	c.messageQueue = make(chan *message.DiameterMessage, messageQueueSize)
+	// trigger initialisation of FSM
+	c.EventChan <- EventStart
 	return nil
 }
 
+// Any special handling for errors can be done here.
 func (c *Client) handleError() error {
 	log.Println("Handling error and resetting to closed state.")
-	// TODO: Code to handle errors and return to Closed state
-	return nil
+	return c.cleanup()
 }
