@@ -16,6 +16,7 @@ func Decode(d Decoder, data []byte) error {
 	return d.Decode(data)
 }
 
+// ToBytes converts a uint32 to a byte slice.
 func ToBytes(value uint32, count int) []byte {
 	result := make([]byte, count)
 	for i := 0; i < count; i++ {
@@ -25,6 +26,7 @@ func ToBytes(value uint32, count int) []byte {
 	return result
 }
 
+// FromBytes converts a byte slice to a uint32.
 func FromBytes(data []byte) uint32 {
 	var result uint32
 	for i := 0; i < len(data); i++ {

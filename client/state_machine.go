@@ -49,7 +49,7 @@ func (c *Client) InitializeFSM() {
 	c.fsm.AddTransition(StateWaitConnAck, StateClosed, EventTimeout, c.cleanup)
 
 	// State: Wait-CEA
-	c.fsm.AddTransition(StateWaitCEA, StateIOpen, EventCEAReceived, func() error {
+	c.fsm.AddTransition(StateWaitCEA, StateIOpen, EventCEAReceived, func(msg *message.DiameterMessage) error {
 		c.startWatchdog()
 		return nil
 	})
@@ -60,14 +60,14 @@ func (c *Client) InitializeFSM() {
 	// State: I-Open
 	c.fsm.AddTransition(StateIOpen, StateIOpen, EventSendMessage, c.sendMessage)
 	c.fsm.AddTransition(StateIOpen, StateIOpen, EventReceiveDWR, c.sendDWA)
-	c.fsm.AddTransition(StateIOpen, StateClosing, EventDisconnect, func() error {
-		c.sendDPR()
-		c.cleanup()
+	c.fsm.AddTransition(StateIOpen, StateClosing, EventDisconnect, func(msg *message.DiameterMessage) error {
+		c.sendDPR(msg)
+		c.cleanup(nil)
 		return nil
 	})
-	c.fsm.AddTransition(StateIOpen, StateClosing, EventReceiveDPR, func() error {
-		c.sendDPA()
-		c.cleanup()
+	c.fsm.AddTransition(StateIOpen, StateClosing, EventReceiveDPR, func(msg *message.DiameterMessage) error {
+		c.sendDPA(msg)
+		c.cleanup(nil)
 		return nil
 	})
 
@@ -78,12 +78,12 @@ func (c *Client) InitializeFSM() {
 
 // Helper functions for transitions
 
-func (c *Client) sendConnRequest() error {
+func (c *Client) sendConnRequest(msg *message.DiameterMessage) error {
 	log.Println("Sending connection request to server.")
 	return c.Connect()
 }
 
-func (c *Client) sendCER() error {
+func (c *Client) sendCER(msg *message.DiameterMessage) error {
 	log.Println("Sending Capabilities-Exchange-Request (CER) to server.")
 	message, err := message.NewCER()
 	if err != nil {
@@ -91,7 +91,7 @@ func (c *Client) sendCER() error {
 		return err
 	}
 	c.SendMessage(message)
-	if err := c.fsm.Trigger(EventCEAReceived); err != nil {
+	if err := c.fsm.Trigger(EventCEAReceived, message); err != nil {
 		log.Printf("Error triggering CEAReceived event: %v", err)
 		return err
 	}
@@ -105,7 +105,7 @@ func (c *Client) startWatchdog() {
 
 // sendMessage sends a Diameter message to the server.
 // The message is taken from the client's message queue.
-func (c *Client) sendMessage() error {
+func (c *Client) sendMessage(msg *message.DiameterMessage) error {
 	log.Println("Sending Diameter message.")
 	for msg := range c.messageQueue {
 		if state := c.fsm.GetState(); state != StateIOpen {
@@ -126,30 +126,31 @@ func (c *Client) sendMessage() error {
 	return nil
 }
 
-func (c *Client) sendDWA() error {
+func (c *Client) sendDWA(msg *message.DiameterMessage) error {
 	log.Println("Sending Diameter Watchdog Answer (DWA) in response to DWR.")
 	// TODO: Code to send a DWA message
 	return nil
 }
 
-func (c *Client) sendDPR() {
+func (c *Client) sendDPR(msg *message.DiameterMessage) error {
 	log.Println("Sending Disconnect-Peer-Request (DPR) to server.")
 	// TODO: Code to send a DPR message
+	return nil
 }
 
-func (c *Client) sendDPA() {
+func (c *Client) sendDPA(msg *message.DiameterMessage) {
 	log.Println("Sending Disconnect-Peer-Answer (DPA) in response to DPR.")
 	// TODO: Code to send a DPA message
 }
 
-func (c *Client) cleanup() error {
+func (c *Client) cleanup(m *message.DiameterMessage) error {
 	log.Println("Cleaning up resources and resetting client state.")
 	if c.conn != nil {
 		c.conn.Close()
 	}
 	c.fsm.SetState(StateClosed)
 	// reset message queue
-	c.messageQueue = make(chan *message.DiameterMessage, messageQueueSize)
+	c.messageQueue = make(chan *message.DiameterMessage, c.messageQueueSize)
 	// trigger initialisation of FSM
 	c.EventChan <- EventStart
 	return nil
@@ -158,5 +159,5 @@ func (c *Client) cleanup() error {
 // Any special handling for errors can be done here.
 func (c *Client) handleError() error {
 	log.Println("Handling error and resetting to closed state.")
-	return c.cleanup()
+	return c.cleanup(nil)
 }

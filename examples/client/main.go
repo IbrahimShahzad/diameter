@@ -1,24 +1,25 @@
 package main
 
-// import (
-// 	"diameter"
-// 	"log"
-// )
-//
-// func main() {
-// 	client := diameter.NewClient("localhost:3868")
-// 	err := client.Connect()
-// 	if err != nil {
-// 		log.Fatalf("Failed to connect: %v", err)
-// 	}
-//
-// 	// Send a custom Diameter message
-// 	msg := diameter.NewDiameterMessage(diameter.COMMAND_CODE_MAR, true)
-// 	msg.AddAVP(diameter.NewAVP(diameter.AVP_CODE_USER_NAME, "example-user"))
-// 	client.SendMessage(msg)
-//
-// 	client.Disconnect()
-// }
+import (
+	dc "github.com/IbrahimShahzad/diameter/client"
+	"log"
+)
+
+func main() {
+	client, err := dc.NewClient(
+		dc.WithTCP(),
+		dc.WithConnectionTimeout(5),
+		dc.WithServerAddr("localhost:3868"))
+	if err != nil {
+		log.Fatalf("Failed to create client: %v", err)
+	}
+	err = client.Connect()
+	if err != nil {
+		log.Fatalf("Failed to connect: %v", err)
+	}
+
+	client.Disconnect()
+}
 
 // transport example
 // package transport

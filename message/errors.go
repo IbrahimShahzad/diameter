@@ -36,3 +36,7 @@ var (
 var (
 	InvalidCommandCodeError = errors.New("invalid command code")
 )
+
+var (
+	InvalidUTF8StringError = errors.New("invalid UTF-8 string")
+)

@@ -3,8 +3,10 @@ package message
 
 import (
 	"fmt"
-	"github.com/IbrahimShahzad/diameter/utils"
+	"log"
 	"math/rand/v2"
+
+	"github.com/IbrahimShahzad/diameter/utils"
 )
 
 const (
@@ -106,37 +108,47 @@ func (h *DiameterHeader) Encode() []byte {
 	return header
 }
 
-func (h *DiameterHeader) Decode(data []byte) error {
+func DecodeHeader(data []byte) (*DiameterHeader, error) {
+
 	if len(data) < DIAMETER_HEADER_SIZE {
-		return InvalidDiameterHeaderLengthError
+		log.Printf("DiameterHeader Decode: Insufficient data %d", len(data))
+		return nil, InvalidDiameterHeaderLengthError
 	}
 	// Decode the header fields from the byte slice.
 	byteCount := 0
-	h.Version = data[byteCount]
+	version := data[byteCount]
 	byteCount += DIAMETER_VERSION_SIZE
-	if h.Version != DIAMETER_VERSION {
-		return InvalidDiameterVersionError
+	if version != DIAMETER_VERSION {
+		return nil, InvalidDiameterVersionError
 	}
 
-	h.MessageLength = utils.FromBytes(data[byteCount : byteCount+DIAMETER_MESSAGE_SIZE])
+	messageLength := utils.FromBytes(data[byteCount : byteCount+DIAMETER_MESSAGE_SIZE])
 	byteCount += DIAMETER_MESSAGE_SIZE
 
-	h.CommandFlags = data[byteCount]
+	commandFlags := data[byteCount]
 	byteCount += DIAMETER_COMMAND_FLAGS_SIZE
 
-	h.CommandCode = utils.FromBytes(data[byteCount : byteCount+DIAMETER_COMMAND_CODE_SIZE])
+	commandCode := utils.FromBytes(data[byteCount : byteCount+DIAMETER_COMMAND_CODE_SIZE])
 	byteCount += DIAMETER_COMMAND_CODE_SIZE
 
-	h.ApplicationID = utils.FromBytes(data[byteCount : byteCount+DIAMETER_APPLICATION_ID_SIZE])
+	applicationID := utils.FromBytes(data[byteCount : byteCount+DIAMETER_APPLICATION_ID_SIZE])
 	byteCount += DIAMETER_APPLICATION_ID_SIZE
 
-	h.HopByHopID = utils.FromBytes(data[byteCount : byteCount+DIAMETER_HOP_BY_HOP_ID_SIZE])
+	hopByHopID := utils.FromBytes(data[byteCount : byteCount+DIAMETER_HOP_BY_HOP_ID_SIZE])
 	byteCount += DIAMETER_HOP_BY_HOP_ID_SIZE
 
-	h.EndToEndID = utils.FromBytes(data[byteCount : byteCount+DIAMETER_END_TO_END_ID_SIZE])
+	endToEndID := utils.FromBytes(data[byteCount : byteCount+DIAMETER_END_TO_END_ID_SIZE])
 	byteCount += DIAMETER_END_TO_END_ID_SIZE
 
-	return nil
+	return &DiameterHeader{
+		Version:       version,
+		MessageLength: messageLength,
+		CommandFlags:  commandFlags,
+		CommandCode:   commandCode,
+		ApplicationID: applicationID,
+		HopByHopID:    hopByHopID,
+		EndToEndID:    endToEndID,
+	}, nil
 }
 
 func generateHopByHopID() uint32 {
@@ -159,7 +171,7 @@ func (m *DiameterMessage) String() string {
 		avps += avp.String() + "\n"
 	}
 	return fmt.Sprintf(
-		"DiameterMessage{\nHeader: %s\nAVPs: %s}",
+		"DiameterMessage{\nHeader: %s\nAVPs: \n%s}",
 		m.Header.String(),
 		avps,
 	)
@@ -183,89 +195,69 @@ func (msg *DiameterMessage) Encode() ([]byte, error) {
 	return append(header, avps...), nil
 }
 
-func (msg *DiameterMessage) Decode(data []byte) error {
+func DecodeMessage(data []byte) (*DiameterMessage, error) {
 	if len(data) < DIAMETER_HEADER_SIZE {
-		return InvalidMessageLengthError
-	}
-
-	version := data[0]
-	msgStart := DIAMETER_VERSION_SIZE
-	msgLenEnd := msgStart + DIAMETER_MESSAGE_SIZE
-	msgLen := utils.FromBytes(data[msgStart : msgLenEnd+1])
-	if len(data) < int(msgLen) {
-		return InvalidMessageLengthError
-	}
-
-	cFlags := data[msgLenEnd]
-
-	cmdCodeStart := msgLenEnd + DIAMETER_COMMAND_FLAGS_SIZE
-	cmdCodeEnd := cmdCodeStart + DIAMETER_COMMAND_CODE_SIZE
-	cmdCode := utils.FromBytes(data[cmdCodeStart : cmdCodeEnd+1])
-
-	appIDEnd := cmdCodeEnd + DIAMETER_APPLICATION_ID_SIZE
-	appID := utils.FromBytes(data[cmdCodeEnd:appIDEnd])
-
-	hopByHopIDEnd := appIDEnd + DIAMETER_HOP_BY_HOP_ID_SIZE
-	hopByHopID := utils.FromBytes(data[appIDEnd:hopByHopIDEnd])
-
-	endToEndIDEnd := hopByHopIDEnd + DIAMETER_END_TO_END_ID_SIZE
-	endToEndID := utils.FromBytes(data[hopByHopIDEnd:endToEndIDEnd])
-
-	if version != DIAMETER_VERSION {
-		return InvalidDiameterVersionError
+		return nil, InvalidMessageLengthError
 	}
 
 	// Decode the header
-	msg.Header = &DiameterHeader{
-		Version:       version,
-		MessageLength: msgLen,
-		CommandFlags:  cFlags,
-		CommandCode:   cmdCode,
-		ApplicationID: appID,
-		HopByHopID:    hopByHopID,
-		EndToEndID:    endToEndID,
+	header, err := DecodeHeader(data)
+	if err != nil {
+		log.Printf("DiameterMessage Decode: Header Decode error %v", err)
+		return nil, err
 	}
-	// fmt.Println("DiameterMessage Header: ", msg.Header)
 
 	// Decode each AVP
 	offset := DIAMETER_HEADER_SIZE
 	avps, err := extractAVPs(data[offset:])
 	if err != nil {
-		return err
+		return nil, err
 	}
-	// fmt.Println("DiameterMessage AVPs: ", avps)
-	msg.AVPs = avps
 
-	return nil
+	return &DiameterMessage{
+		Header: header,
+		AVPs:   avps,
+	}, nil
 }
 
 // NewCER generates a Capabilities-Exchange-Request message.
 func NewCER(avps ...*AVP) (*DiameterMessage, error) {
+	return NewRequest(COMMAND_CODE_CER, avps...)
+}
+
+func NewRequest(commandCode uint32, avps ...*AVP) (*DiameterMessage, error) {
 	return &DiameterMessage{
 		Header: &DiameterHeader{
 			Version:       DIAMETER_VERSION,
 			CommandFlags:  COMMAND_FLAG_REQUEST, // Set 'R' bit for request
-			CommandCode:   COMMAND_CODE_CER,     // CER Command Code
-			ApplicationID: 0,                    // Base Protocol Application ID
+			CommandCode:   commandCode,
+			ApplicationID: 0, // Base Protocol Application ID
 			HopByHopID:    generateHopByHopID(),
 			EndToEndID:    generateEndToEndID(),
+			MessageLength: uint32(DIAMETER_HEADER_SIZE + len(avps)),
 		},
 		AVPs: avps,
 	}, nil
 }
 
-func NewDWR(avps ...*AVP) (*DiameterMessage, error) {
-	return &DiameterMessage{
+func NewResponseFromRequest(request *DiameterMessage, avps ...*AVP) (*DiameterMessage, error) {
+	msg := &DiameterMessage{
 		Header: &DiameterHeader{
 			Version:       DIAMETER_VERSION,
-			CommandFlags:  COMMAND_FLAG_REQUEST, // Set 'R' bit for request
-			CommandCode:   COMMAND_CODE_DWR,     // DWR Command Code
-			ApplicationID: 0,                    // Base Protocol Application ID
-			HopByHopID:    generateHopByHopID(),
-			EndToEndID:    generateEndToEndID(),
+			CommandFlags:  COMMAND_FLAG_RESPONSE, // Set 'R' bit for response
+			CommandCode:   request.Header.CommandCode,
+			ApplicationID: request.Header.ApplicationID,
+			HopByHopID:    request.Header.HopByHopID,
+			EndToEndID:    request.Header.EndToEndID,
 		},
 		AVPs: avps,
-	}, nil
+	}
+	msg.Header.MessageLength = uint32(DIAMETER_HEADER_SIZE + len(msg.AVPs))
+	return msg, nil
+}
+
+func NewDWR(avps ...*AVP) (*DiameterMessage, error) {
+	return NewRequest(COMMAND_CODE_DWR, avps...)
 }
 
 // read CEA message, check Success or Failure and return AVPs

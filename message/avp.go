@@ -55,6 +55,19 @@ type AVPData interface {
 	Length() uint32
 	String() string
 	SetData(data interface{}) error
+	Type() AVPType
+}
+
+func DecodeAVPData(code uint32, data []byte) (AVPData, error) {
+	f, ok := avpTypeMap[code]
+	if !ok {
+		return nil, errors.New("Unsupported AVP code")
+	}
+	avpData := f()
+	if err := avpData.Decode(data); err != nil {
+		return nil, err
+	}
+	return avpData, nil
 }
 
 func (a *AVP) Length() uint32 {
@@ -63,7 +76,7 @@ func (a *AVP) Length() uint32 {
 
 func (a *AVP) String() string {
 	return fmt.Sprintf(
-		"AVP{Code: %d, Flags: %d, Length: %d, VendorID: %d, Data: %s}",
+		"\tAVP{Code: %d, Flags: %d, Length: %d, VendorID: %d, Data: %s}",
 		a.Code,
 		a.Flags,
 		a.AVPlength,
@@ -97,32 +110,51 @@ func (a *AVP) Encode() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	if IsDerivedFromOctetString(a.Data) {
+		padding := getPadding(len(data))
+		data = append(data, make([]byte, padding)...)
+	}
 	return append(header, data...), nil
 }
 
-func (a *AVP) Decode(data []byte) error {
-	if len(data) < a.getHeaderLength() {
-		return fmt.Errorf("AVP Decode: Insufficient data")
+func DecodeAVP(data []byte) (*AVP, error) {
+	if len(data) < AVPHeaderLength {
+		return nil, fmt.Errorf("AVP Decode: Insufficient data")
 	}
 
-	a.Code = utils.FromBytes(data[0:AVP_CODE_LENGTH])
+	code := utils.FromBytes(data[0:AVP_CODE_LENGTH])
 	byteCount := AVP_CODE_LENGTH
 
-	a.Flags = data[byteCount]
+	flags := data[byteCount]
 	byteCount += AVP_FLAGS_LENGTH
 
-	a.AVPlength = utils.FromBytes(data[byteCount : byteCount+AVP_LENGTH_LENGTH])
+	AVPlength := utils.FromBytes(data[byteCount : byteCount+AVP_LENGTH_LENGTH])
 	byteCount += AVP_LENGTH_LENGTH
 
-	if a.isFlagSet(VENDOR_FLAG) {
-		a.VendorID = utils.FromBytes(data[byteCount : byteCount+AVP_VENDOR_ID_LENGTH])
+	if len(data) < int(AVPlength) {
+		return nil, fmt.Errorf("AVP Decode: Insufficient data")
 	}
 
-	if len(data) < int(a.AVPlength) {
-		return fmt.Errorf("AVP Decode: Insufficient data")
+	avp := &AVP{
+		Code:      code,
+		Flags:     flags,
+		AVPlength: AVPlength,
 	}
 
-	return utils.Decode(a.Data, data[a.getHeaderLength():])
+	if avp.isFlagSet(VENDOR_FLAG) {
+		if len(data) < AVPHeaderLengthWithV {
+			return nil, fmt.Errorf("AVP Decode: Insufficient data")
+		}
+		avp.VendorID = utils.FromBytes(data[byteCount : byteCount+AVP_VENDOR_ID_LENGTH])
+	}
+
+	avpData, err := DecodeAVPData(avp.Code, data[byteCount:AVPlength])
+	if err != nil {
+		return nil, err
+	}
+	avp.Data = avpData
+	return avp, nil
 }
 
 func (a *AVP) setFlag(flag uint8) {
@@ -215,8 +247,8 @@ func extractAVPs(data []byte) ([]*AVP, error) {
 	avps := make([]*AVP, 0)
 	offset := 0
 	for offset < len(data) {
-		avp := &AVP{}
-		if err := avp.Decode(data[offset:]); err != nil {
+		avp, err := DecodeAVP(data[offset:])
+		if err != nil {
 			return nil, err
 		}
 		avps = append(avps, avp)

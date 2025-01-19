@@ -1,17 +1,21 @@
 // Generalized finite state machine logic
+// Diameter State Machine as per [RFC 6733]
+// [RFC 6733]: (https://tools.ietf.org/html/rfc6733)
 package state
 
 import (
 	"errors"
 	"fmt"
 	"sync"
+
+	"github.com/IbrahimShahzad/diameter/message"
 )
 
 type State int
 
 type Event int
 
-type ActionFunc func() error
+type ActionFunc func(msg *message.DiameterMessage) error
 
 type Transition struct {
 	From   State
@@ -26,13 +30,21 @@ type FSM struct {
 	transitions map[State]map[Event]Transition
 }
 
-const (
-	InitialState State = iota
-	StateWaitConAck
-	StateOpen
-	StateWaitDisAck
-	StateClosed
-)
+// const (
+// 	InitialState State = iota
+// 	StateWaitConAck
+// 	StateOpen
+// 	StateWaitDisAck
+// 	StateClosed
+// )
+
+// var stateNames = map[State]string{
+// 	InitialState:    "Initial",
+// 	StateWaitConAck: "WaitConAck",
+// 	StateOpen:       "Open",
+// 	StateWaitDisAck: "WaitDisAck",
+// 	StateClosed:     "Closed",
+// }
 
 func NewFSM(s State) *FSM {
 	return &FSM{
@@ -63,7 +75,7 @@ func (f *FSM) AddTransition(from State, to State, event Event, action ActionFunc
 // executes the associated action if any, and updates the FSM's state.
 //
 // Returns an error if no transition is registered for the current state or event, or if the action fails.
-func (f *FSM) Trigger(event Event) error {
+func (f *FSM) Trigger(event Event, msg *message.DiameterMessage) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -82,7 +94,7 @@ func (f *FSM) Trigger(event Event) error {
 
 	// Execute the action associated with the transition.
 	if transition.Action != nil {
-		if err := transition.Action(); err != nil {
+		if err := transition.Action(msg); err != nil {
 			return err
 		}
 	}
@@ -104,3 +116,11 @@ func (f *FSM) SetState(s State) {
 	defer f.mu.Unlock()
 	f.state = s
 }
+
+// func (f *FSM) ShowTransitions() {
+// 	for from, events := range f.transitions {
+// 		for event, transition := range events {
+// 			log.Printf("From: %s, Event: %d, To: %s\n", stateNames[from], event, stateNames[transition.To])
+// 		}
+// 	}
+// }

@@ -1,386 +1,11 @@
 package message
 
 import (
-	"encoding/binary"
 	"fmt"
-	"math"
 	"net"
+	"time"
+	"unicode/utf8"
 )
-
-// TODO: Fix the encoding decoding functions for the derived types
-
-// https://datatracker.ietf.org/doc/html/rfc6733
-
-const (
-	int32Length = 4
-	int64Length = 8
-	bitsInByte  = 8
-)
-
-const (
-	IPAddressTypeLength = 2
-	IPv4AddressLength   = 4
-	IPv6AddressLength   = 16
-)
-
-const (
-	AddressFamilyIPv4Byte = byte(0x01) // 0x01 for IPv4
-	AddressFamilyIPv6Byte = byte(0x02) // 0x02 for IPv6
-)
-
-func encode32[T uint32 | int32](data T) ([]byte, error) {
-	buffer := make([]byte, int32Length)
-	for i := 0; i < int32Length; i++ {
-		buffer[int32Length-1-i] = byte((data >> uint(i*bitsInByte)) & 0xFF)
-	}
-	return buffer, nil
-}
-
-func encode64[T uint64 | int64](data T) ([]byte, error) {
-	buffer := make([]byte, int64Length)
-	for i := 0; i < int64Length; i++ {
-		buffer[int64Length-1-i] = byte((data >> uint(i*bitsInByte)) & 0xFF)
-	}
-	return buffer, nil
-}
-
-func decode32[T uint32 | int32](data []byte, t T) (T, error) {
-	for i := 0; i < int32Length; i++ {
-		t = t | T(data[i])<<uint(bitsInByte*i)
-	}
-	return t, nil
-}
-
-func decode64[T uint64 | int64](data []byte, t T) (T, error) {
-	for i := 0; i < int64Length; i++ {
-		t = t | T(data[i])<<uint(bitsInByte*i)
-	}
-	return t, nil
-}
-
-// Basic AVP Data Types
-
-// OctetString
-//
-//	The data contains arbitrary data of variable length.  Unless
-//	otherwise noted, the AVP Length field MUST be set to at least 8
-//	(12 if the 'V' bit is enabled).  AVP values of this type that are
-//	not a multiple of 4 octets in length are followed by the necessary
-//	padding so that the next AVP (if any) will start on a 32-bit
-//	boundary.
-type OctetString struct {
-	Data       []byte
-	min_length uint32
-}
-
-func (o *OctetString) SetData(data interface{}) error {
-	if d, ok := data.([]byte); ok {
-		o.Data = d
-		return nil
-	}
-	return fmt.Errorf("invalid data type: %T", data)
-}
-
-func (o *OctetString) Length() uint32 {
-	return uint32(len(o.Data))
-}
-
-func (o *OctetString) Encode() ([]byte, error) {
-	length := len(o.Data)
-	if length < int(o.min_length) {
-		length = int(o.min_length)
-	}
-	buffer := make([]byte, length+getPadding(length))
-	copy(buffer, o.Data)
-	return buffer, nil
-}
-
-func (o *OctetString) Decode(data []byte) error {
-	o.Data = data
-	return nil
-}
-
-func (o *OctetString) String() string {
-	return string(o.Data)
-}
-
-// Integer32
-//
-//	32-bit signed value, in network byte order.  The AVP Length field
-//	MUST be set to 12 (16 if the 'V' bit is enabled).
-type Integer32 struct {
-	Data int32
-}
-
-func (i *Integer32) SetData(data interface{}) error {
-	if d, ok := data.(int32); ok {
-		i.Data = d
-		return nil
-	}
-	return fmt.Errorf("invalid data type: %T", data)
-}
-
-func (i *Integer32) Length() uint32 {
-	return int32Length
-}
-
-func (u *Integer32) Encode() ([]byte, error) {
-	return encode32(u.Data)
-}
-
-func (u *Integer32) Decode(data []byte) error {
-	var err error
-	u.Data, err = decode32(data, int32(0))
-	return err
-}
-
-func (i *Integer32) String() string {
-	return fmt.Sprintf("%d", i.Data)
-}
-
-// Integer64
-//
-//	64-bit signed value, in network byte order.  The AVP Length field
-//	MUST be set to 16 (20 if the 'V' bit is enabled).
-type Integer64 struct {
-	Data int64
-}
-
-func (i *Integer64) SetData(data interface{}) error {
-	if d, ok := data.(int64); ok {
-		i.Data = d
-		return nil
-	}
-	return fmt.Errorf("invalid data type: %T", data)
-}
-
-func (u *Integer64) Encode() ([]byte, error) {
-	return encode64(u.Data)
-}
-
-func (u *Integer64) Decode(data []byte) error {
-	var err error
-	u.Data, err = decode64(data, int64(0))
-	return err
-}
-
-func (i *Integer64) Length() uint32 {
-	return int64Length
-}
-
-func (i *Integer64) String() string {
-	return fmt.Sprintf("%d", i.Data)
-}
-
-// Unsigned32
-//
-//	32-bit unsigned value, in network byte order.  The AVP Length
-//	field MUST be set to 12 (16 if the 'V' bit is enabled).
-type Unsigned32 struct {
-	Data uint32
-}
-
-func (u *Unsigned32) SetData(data interface{}) error {
-	if d, ok := data.(uint32); ok {
-		u.Data = d
-		return nil
-	}
-	return fmt.Errorf("invalid data type: %T", data)
-}
-
-func (u *Unsigned32) Encode() ([]byte, error) {
-	return encode32(u.Data)
-}
-
-func (u *Unsigned32) Length() uint32 {
-	return int32Length
-}
-
-func (u *Unsigned32) Decode(data []byte) error {
-	var err error
-	u.Data, err = decode32(data, uint32(0))
-	return err
-}
-
-func (u *Unsigned32) String() string {
-	return fmt.Sprintf("%d", u.Data)
-}
-
-// Unsigned64
-//
-//	64-bit unsigned value, in network byte order.  The AVP Length
-//	field MUST be set to 16 (20 if the 'V' bit is enabled).
-type Unsigned64 struct {
-	Data uint64
-}
-
-func (u *Unsigned64) SetData(data interface{}) error {
-	if d, ok := data.(uint64); ok {
-		u.Data = d
-		return nil
-	}
-	return fmt.Errorf("invalid data type: %T", data)
-}
-
-func (u *Unsigned64) Encode() ([]byte, error) {
-	return encode64(u.Data)
-}
-
-func (u *Unsigned64) Decode(data []byte) error {
-	var err error
-	u.Data, err = decode64(data, uint64(0))
-	return err
-}
-
-func (u *Unsigned64) Length() uint32 {
-	return int64Length
-}
-
-func (u *Unsigned64) String() string {
-	return fmt.Sprintf("%d", u.Data)
-}
-
-// Float32
-//
-//	This represents floating point values of single precision as
-//	described by [FLOATPOINT].  The 32-bit value is transmitted in
-//	network byte order.  The AVP Length field MUST be set to 12 (16 if
-//	the 'V' bit is enabled).
-type Float32 struct {
-	Data float32
-}
-
-func (f *Float32) SetData(data interface{}) error {
-	if d, ok := data.(float32); ok {
-		f.Data = d
-		return nil
-	}
-	return fmt.Errorf("invalid data type: %T", data)
-}
-
-func (f *Float32) Length() uint32 {
-	return int32Length
-}
-
-func (f *Float32) Encode() ([]byte, error) {
-	buf := make([]byte, 4)
-	binary.BigEndian.PutUint32(buf, math.Float32bits(f.Data))
-	return buf, nil
-}
-
-func (f *Float32) Decode(data []byte) error {
-	if len(data) != 4 {
-		return fmt.Errorf("invalid data length: %d", len(data))
-	}
-	f.Data = math.Float32frombits(binary.BigEndian.Uint32(data))
-	return nil
-}
-
-func (f *Float32) String() string {
-	return fmt.Sprintf("%f", f.Data)
-}
-
-// Float64
-//
-//	This represents floating point values of double precision as
-//	described by [FLOATPOINT].  The 64-bit value is transmitted in
-//	network byte order.  The AVP Length field MUST be set to 16 (20 if
-//	the 'V' bit is enabled).
-type Float64 struct {
-	Data float64
-}
-
-func (f *Float64) SetData(data interface{}) error {
-	if d, ok := data.(float64); ok {
-		f.Data = d
-		return nil
-	}
-	return fmt.Errorf("invalid data type: %T", data)
-}
-
-func (f *Float64) Length() uint32 {
-	return int64Length
-}
-
-func (f *Float64) Encode() ([]byte, error) {
-	buf := make([]byte, 8)
-	binary.BigEndian.PutUint64(buf, math.Float64bits(f.Data))
-	return buf, nil
-}
-
-func (f *Float64) Decode(data []byte) error {
-	if len(data) != 8 {
-		return fmt.Errorf("invalid data length: %d", len(data))
-	}
-	f.Data = math.Float64frombits(binary.BigEndian.Uint64(data))
-	return nil
-}
-
-func (f *Float64) String() string {
-	return fmt.Sprintf("%f", f.Data)
-}
-
-// Grouped
-//
-//	The Data field is specified as a sequence of AVPs.  These AVPs are
-//	concatenated -- including their headers and padding -- in the
-//	order in which they are specified and the result encapsulated in
-//	the Data field.  The AVP Length field is set to 8 (12 if the 'V'
-//	bit is enabled) plus the total length of all included AVPs,
-//	including their headers and padding.  Thus, the AVP Length field
-//	of an AVP of type Grouped is always a multiple of 4.
-type Grouped struct {
-	AVPs []*AVP
-}
-
-func (g *Grouped) SetData(data interface{}) error {
-	if d, ok := data.([]*AVP); ok {
-		g.AVPs = d
-		return nil
-	}
-	return fmt.Errorf("invalid data type: %T", data)
-}
-
-func (g *Grouped) Length() uint32 {
-	length := uint32(0)
-	for _, avp := range g.AVPs {
-		length += avp.Length()
-	}
-	return length
-}
-
-func (g *Grouped) Encode() ([]byte, error) {
-	buffer := make([]byte, 0)
-	for _, avp := range g.AVPs {
-		encoded, err := avp.Encode()
-		if err != nil {
-			return nil, err
-		}
-		buffer = append(buffer, encoded...)
-	}
-	return buffer, nil
-}
-
-func (g *Grouped) Decode(data []byte) error {
-	offset := 0
-	for offset < len(data) {
-		avp := &AVP{}
-		if err := avp.Decode(data[offset:]); err != nil {
-			return err
-		}
-		g.AVPs = append(g.AVPs, avp)
-		offset += int(avp.AVPlength)
-	}
-	return nil
-}
-
-func (g *Grouped) String() string {
-	var str string
-	for _, avp := range g.AVPs {
-		str += avp.String() + "\n"
-	}
-	return str
-}
 
 // Derived Type
 //
@@ -393,73 +18,85 @@ func (g *Grouped) String() string {
 //	     defined in [IANAADFAM].  The AddressType is used to discriminate
 //	     the content and format of the remaining octets.
 type Address struct {
+	OctetString
 	Data   net.IP
 	isIPv4 bool
 }
 
-func (i *Address) SetData(data interface{}) error {
-	if d, ok := data.(net.IP); ok {
-		i.Data = d
-		i.isIPv4 = i.Data.To4() != nil
+func (a *Address) SetData(data interface{}) error {
+	switch v := data.(type) {
+	case net.IP:
+		a.Data = v
+		a.isIPv4 = a.Data.To4() != nil
 		return nil
 	}
 	return fmt.Errorf("invalid data type: %T", data)
 }
 
-func (i *Address) Length() uint32 {
-	if i.isIPv4 {
+func (a *Address) Length() uint32 {
+	if a.isIPv4 {
 		return IPAddressTypeLength + IPv4AddressLength
 	}
 	return IPAddressTypeLength + IPv6AddressLength
 }
 
-func (i *Address) Encode() ([]byte, error) {
+func (a *Address) Encode() ([]byte, error) {
+	length := a.Length()
 
-	buffer := make([]byte, i.Length())
-	if i.isIPv4 {
-		ip := i.Data.To4()
+	buffer := make([]byte, length)
+	if a.isIPv4 {
+		ip := a.Data.To4()
 		if ip == nil {
 			return nil, InvalidIPv4AddressError
 		}
-		copy(buffer, []byte{AddressFamilyIPv4Byte})
-		copy(buffer[AddressFamilyIPv4Byte:], ip)
+		buffer[0] = 0
+		buffer[1] = AddressFamilyIPv4Byte
+		copy(buffer[IPAddressTypeLength:], ip)
 	} else {
-		ip := i.Data.To16()
+		ip := a.Data.To16()
 		if ip == nil {
 			return nil, InvalidIPv6AddressError
 		}
-		copy(buffer, []byte{AddressFamilyIPv6Byte})
-		copy(buffer[AddressFamilyIPv6Byte:], ip)
+		buffer[0] = 0
+		buffer[1] = AddressFamilyIPv6Byte
+		copy(buffer[IPAddressTypeLength:], ip)
 	}
 	return append(buffer, make([]byte, getPadding(len(buffer)))...), nil
 }
 
-func (i *Address) Decode(data []byte) error {
+func (a *Address) Decode(data []byte) error {
 	// check for ip type in first 2 bytes + length of ip4 address
 	if len(data) < IPAddressTypeLength {
 		return InvalidAddressLengthError
 	}
 
-	if data[0] == 0 && data[1] == 1 {
+	addressFamily := (uint16(data[0]) << 8) | uint16(data[1])
+	switch addressFamily {
+	case uint16(AddressFamilyIPv4Byte):
 		if len(data) != IPAddressTypeLength+IPv4AddressLength {
 			return InvalidIPv4AddressLengthError
 		}
-		i.isIPv4 = true
-		i.Data = net.IP(data[IPAddressTypeLength : IPAddressTypeLength+IPv4AddressLength])
-	} else if data[0] == 0 && data[1] == 2 {
+		a.isIPv4 = true
+		a.Data = net.IP(data[IPAddressTypeLength : IPAddressTypeLength+IPv4AddressLength])
+	case uint16(AddressFamilyIPv6Byte):
 		if len(data) != IPAddressTypeLength+IPv6AddressLength {
 			return InvalidIPv6AddressLengthError
 		}
-		i.isIPv4 = false
-		i.Data = net.IP(data[IPAddressTypeLength : IPAddressTypeLength+IPv6AddressLength])
-	} else {
+		a.isIPv4 = false
+		a.Data = net.IP(data[IPAddressTypeLength : IPAddressTypeLength+IPv6AddressLength])
+	default:
 		return UnknownAddressTypeError
 	}
+
 	return nil
 }
 
-func (i *Address) String() string {
-	return i.Data.String()
+func (a *Address) String() string {
+	return a.Data.String()
+}
+
+func (a *Address) Type() AVPType {
+	return AddressType
 }
 
 // UTF8String
@@ -495,12 +132,15 @@ func (i *Address) String() string {
 //	Note that the AVP Length field of an UTF8String is measured in
 //	octets not characters.
 type UTF8String struct {
-	Data string
+	OctetString
 }
 
 func (u *UTF8String) SetData(data interface{}) error {
 	if d, ok := data.(string); ok {
-		u.Data = d
+		if !isValidUTF8([]byte(d)) {
+			return InvalidUTF8StringError
+		}
+		u.Data = []byte(d)
 		return nil
 	}
 	return fmt.Errorf("invalid data type: %T", data)
@@ -515,12 +155,22 @@ func (u *UTF8String) Encode() ([]byte, error) {
 }
 
 func (u *UTF8String) Decode(data []byte) error {
-	u.Data = string(data)
-	return nil
+	if !isValidUTF8(data) {
+		return InvalidUTF8StringError
+	}
+	return u.OctetString.Decode(data)
 }
 
 func (u *UTF8String) String() string {
-	return u.Data
+	return u.OctetString.String()
+}
+
+func (u *UTF8String) Type() AVPType {
+	return UTF8StringType
+}
+
+func isValidUTF8(data []byte) bool {
+	return utf8.Valid(data)
 }
 
 // Enumerated
@@ -546,17 +196,20 @@ func (e *Enumerated) Length() uint32 {
 }
 
 func (e *Enumerated) Encode() ([]byte, error) {
-	return encode32(e.Data)
+	return encode32(e.Data), nil
 }
 
 func (e *Enumerated) Decode(data []byte) error {
-	var err error
-	e.Data, err = decode32(data, uint32(0))
-	return err
+	e.Data = decode32(data, uint32(0))
+	return nil
 }
 
 func (e *Enumerated) String() string {
 	return fmt.Sprintf("%d", e.Data)
+}
+
+func (e *Enumerated) Type() AVPType {
+	return EnumeratedType
 }
 
 // Time
@@ -574,15 +227,48 @@ func (e *Enumerated) String() string {
 //	procedure to extend the time to 2104.  This procedure MUST be
 //	supported by all Diameter nodes.
 type Time struct {
-	Data uint32
+	OctetString
 }
 
 func (t *Time) SetData(data interface{}) error {
-	if d, ok := data.(uint32); ok {
-		t.Data = d
-		return nil
+	timeOffset := 2208988800 // Offset for 1 Jan 1900
+	switch v := data.(type) {
+	case uint32:
+		// Directly use NTP seconds
+		t.Data = encode32(v)
+	case time.Time:
+		// Convert from time.Time to NTP seconds
+		ntpSeconds := uint32(v.Unix() + int64(timeOffset))
+		t.Data = encode32(ntpSeconds)
+	case int64, int:
+		// Treat as Epoch seconds and convert to NTP
+		epochSeconds := int64Value(v)
+		ntpSeconds := uint32(epochSeconds + int64(timeOffset))
+		t.Data = encode32(ntpSeconds)
+	case string:
+		// Parse string as a date
+		parsedTime, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return fmt.Errorf("invalid date string: %v", err)
+		}
+		ntpSeconds := uint32(parsedTime.Unix() + int64(timeOffset))
+		t.Data = encode32(ntpSeconds)
+	default:
+		return fmt.Errorf("unsupported data type: %T", v)
 	}
-	return fmt.Errorf("invalid data type: %T", data)
+	return nil
+
+}
+
+func int64Value(data interface{}) int64 {
+	switch v := data.(type) {
+	case int:
+		return int64(v)
+	case int64:
+		return v
+	default:
+		return 0
+	}
 }
 
 func (t *Time) Length() uint32 {
@@ -590,17 +276,31 @@ func (t *Time) Length() uint32 {
 }
 
 func (t *Time) Encode() ([]byte, error) {
-	return encode32(t.Data)
+	if len(t.Data) != int32Length {
+		return nil, fmt.Errorf("invalid data length: expected 4, got %d", len(t.Data))
+	}
+	return t.Data, nil
 }
 
 func (t *Time) Decode(data []byte) error {
-	var err error
-	t.Data, err = decode32(data, uint32(0))
-	return err
+	if len(data) != int32Length {
+		return fmt.Errorf("invalid data length: expected 4, got %d", len(data))
+	}
+	t.Data = data
+	return nil
 }
 
 func (t *Time) String() string {
-	return fmt.Sprintf("%d", t.Data)
+	if len(t.Data) != int32Length {
+		return "invalid time format"
+	}
+	// Convert 4 bytes back to uint32
+	seconds := uint32(t.Data[0])<<24 | uint32(t.Data[1])<<16 | uint32(t.Data[2])<<8 | uint32(t.Data[3])
+	return fmt.Sprintf("%d", seconds)
+}
+
+func (t *Time) Type() AVPType {
+	return TimeType
 }
 
 // DiameterIdentity
@@ -630,13 +330,19 @@ func (t *Time) String() string {
 //     infrastructure.  See Appendix D for interactions between the
 //     Diameter protocol and Internationalized Domain Names (IDNs).
 type DiameterIdentity struct {
-	Data string
+	OctetString
 }
 
-func (i *DiameterIdentity) SetData(data interface{}) error {
+//	func (i *DiameterIdentity) SetData(data interface{}) error {
+//		if d, ok := data.(string); ok {
+//			i.Data = d
+//			return nil
+//		}
+//		return fmt.Errorf("invalid data type: %T", data)
+//	}
+func SetData(i *DiameterIdentity, data interface{}) error {
 	if d, ok := data.(string); ok {
-		i.Data = d
-		return nil
+		return i.OctetString.SetData([]byte(d))
 	}
 	return fmt.Errorf("invalid data type: %T", data)
 }
@@ -646,16 +352,20 @@ func (d *DiameterIdentity) Length() uint32 {
 }
 
 func (d *DiameterIdentity) Encode() ([]byte, error) {
-	return []byte(d.Data), nil
+	return d.Data, nil
 }
 
 func (d *DiameterIdentity) Decode(data []byte) error {
-	d.Data = string(data)
+	d.Data = data
 	return nil
 }
 
 func (d *DiameterIdentity) String() string {
-	return d.Data
+	return string(d.Data)
+}
+
+func (d *DiameterIdentity) Type() AVPType {
+	return DiameterIdentityType
 }
 
 type AppId struct {
@@ -675,17 +385,20 @@ func (a *AppId) Length() uint32 {
 }
 
 func (a *AppId) Encode() ([]byte, error) {
-	return encode32(a.Data)
+	return encode32(a.Data), nil
 }
 
 func (a *AppId) Decode(data []byte) error {
-	var err error
-	a.Data, err = decode32(data, uint32(0))
-	return err
+	a.Data = decode32(data, uint32(0))
+	return nil
 }
 
 func (a *AppId) String() string {
 	return fmt.Sprintf("%d", a.Data)
+}
+
+func (a *AppId) Type() AVPType {
+	return AppIdType
 }
 
 type VendorId struct {
@@ -705,17 +418,20 @@ func (v *VendorId) Length() uint32 {
 }
 
 func (v *VendorId) Encode() ([]byte, error) {
-	return encode32(v.Data)
+	return encode32(v.Data), nil
 }
 
 func (v *VendorId) Decode(data []byte) error {
-	var err error
-	v.Data, err = decode32(data, uint32(0))
-	return err
+	v.Data = decode32(data, uint32(0))
+	return nil
 }
 
 func (v *VendorId) String() string {
 	return fmt.Sprintf("%d", v.Data)
+}
+
+func (v *VendorId) Type() AVPType {
+	return VendorIdType
 }
 
 // DiameterURI
@@ -797,6 +513,10 @@ func (d *DiameterURI) String() string {
 	return d.Data
 }
 
+func (d *DiameterURI) Type() AVPType {
+	return DiameterURIType
+}
+
 // IPFilterRule
 //
 //	The IPFilterRule format is derived from the OctetString Basic AVP
@@ -831,15 +551,18 @@ func (i *IPFilterRule) Length() uint32 {
 }
 
 func (i *IPFilterRule) Encode() ([]byte, error) {
-	return encode32(i.Data)
+	return encode32(i.Data), nil
 }
 
 func (i *IPFilterRule) Decode(data []byte) error {
-	var err error
-	i.Data, err = decode32(data, uint32(0))
-	return err
+	i.Data = decode32(data, uint32(0))
+	return nil
 }
 
 func (i *IPFilterRule) String() string {
 	return fmt.Sprintf("%d", i.Data)
+}
+
+func (i *IPFilterRule) Type() AVPType {
+	return IPFilterRuleType
 }

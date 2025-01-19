@@ -2,10 +2,12 @@
 package transport
 
 import (
-	"github.com/ishidawataru/sctp"
+	"context"
 	"log"
 	"net"
 	"time"
+
+	"github.com/ishidawataru/sctp"
 )
 
 // Protcol specifier
@@ -20,6 +22,7 @@ const (
 // communication.
 type DiameterConnection struct {
 	conn         net.Conn
+	ctx          context.Context
 	readTimeout  time.Duration
 	writeTimeout time.Duration
 	protocol     ProtocolType
@@ -38,14 +41,19 @@ func NewDiameterConnection(
 
 	switch protocol {
 	case Proto_TCP:
+		log.Printf("Connecting to %s via tcp", addr)
 		dialer := net.Dialer{Timeout: timeout}
-		conn, err = dialer.Dial("tcp", addr)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		_ = cancel
+		conn, err = dialer.DialContext(ctx, "tcp", addr)
 	case Proto_SCTP:
 		conn, err = sctp.DialSCTP("sctp", nil, &sctp.SCTPAddr{IPAddrs: []net.IPAddr{{IP: net.ParseIP(addr)}}})
 	}
 	if err != nil {
+		log.Printf("Failed to connect to %s: %v", addr, err)
 		return nil, err
 	}
+	log.Printf("Connected to %s", addr)
 	return &DiameterConnection{
 		conn:     conn,
 		protocol: protocol,
@@ -80,6 +88,14 @@ func (dc *DiameterConnection) Write(data []byte) (int, error) {
 func (dc *DiameterConnection) Close() error {
 	log.Println("Closing connection.")
 	return dc.conn.Close()
+}
+
+func (dc *DiameterConnection) LocalAddr() net.Addr {
+	return dc.conn.LocalAddr()
+}
+
+func (dc *DiameterConnection) RemoteAddr() net.Addr {
+	return dc.conn.RemoteAddr()
 }
 
 // SetTimeouts sets read and write timeouts for the connection.
