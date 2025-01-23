@@ -1,4 +1,5 @@
 // Client struct and methods for starting/stopping
+// FIXME: Fix client errors
 package client
 
 import (

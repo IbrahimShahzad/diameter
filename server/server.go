@@ -2,7 +2,7 @@
 package server
 
 import (
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/IbrahimShahzad/diameter/message"
@@ -15,9 +15,7 @@ const defaultWatchdogTTL = 10
 const defaultConnectionTimeout = 5 * time.Second
 const defaultEventBufferSize = 10
 const defaultMessageQueueSize = 10
-
-// multiple connections with different peers
-// each with its own FSM
+const defaultMessageReadSize = 1024
 
 type Server struct {
 	ServerOptions
@@ -111,12 +109,10 @@ func NewServer(opts ...ServerOptionsFunc) *Server {
 func (s *Server) AddNewPeer(conn *transport.DiameterConnection) {
 	s.peers[conn.RemoteAddr().String()] = &Peer{
 		conn:         conn,
-		fsm:          fsm.NewFSM(StateClosed),
+		fsm:          fsm.NewDiameterFSM(),
 		EventChan:    make(chan fsm.Event, s.eventBufferSize),
 		messageQueue: make(chan *message.DiameterMessage, s.messageQueueSize),
 	}
-	// initialize the FSM
-	s.peers[conn.RemoteAddr().String()].InitializeFSM()
 }
 
 func (s *Server) ListenAndServe() error {
@@ -139,19 +135,20 @@ func (s *Server) ListenAndServe() error {
 func (s *Server) handlePeer(p *Peer) {
 	defer p.conn.Close()
 
-	buffer := make([]byte, 1024)
+	buffer := make([]byte, defaultMessageReadSize)
 	for {
 		n, err := p.conn.Read(buffer)
 		if err != nil {
+			slog.Error("Error reading from connection", "err", err)
 			return
 		}
 
-		log.Printf("Received message: %s", string(buffer[:n]))
+		slog.Debug("Received", "message", string(buffer[:n]))
 
 		// Parse the message
 		msg, err := message.DecodeMessage(buffer[:n])
 		if err != nil {
-			log.Printf("Error parsing message: %v", err)
+			slog.Error("Error parsing", "message", err)
 			return
 		}
 		// Handle the message

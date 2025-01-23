@@ -4,123 +4,95 @@
 package state
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
-
-	"github.com/IbrahimShahzad/diameter/message"
 )
 
-type State int
+type State string
+type Event string
 
-type Event int
+// type ActionFunc func(msg *message.DiameterMessage) error
+type ActionFunc[T any] func(ctx context.Context, args T) (T, error)
 
-type ActionFunc func(msg *message.DiameterMessage) error
-
-type Transition struct {
+type Transition[T any] struct {
 	From   State
 	To     State
 	Event  Event
-	Action ActionFunc
+	Action []Action[T]
 }
 
-type FSM struct {
-	mu          sync.Mutex
-	state       State
-	transitions map[State]map[Event]Transition
+type FSM[T any] struct {
+	states       []State
+	mu           sync.Mutex
+	currentState State
+	transitions  []Transition[T]
 }
 
-// const (
-// 	InitialState State = iota
-// 	StateWaitConAck
-// 	StateOpen
-// 	StateWaitDisAck
-// 	StateClosed
-// )
-
-// var stateNames = map[State]string{
-// 	InitialState:    "Initial",
-// 	StateWaitConAck: "WaitConAck",
-// 	StateOpen:       "Open",
-// 	StateWaitDisAck: "WaitDisAck",
-// 	StateClosed:     "Closed",
-// }
-
-func NewFSM(s State) *FSM {
-	return &FSM{
-		state:       s,
-		transitions: make(map[State]map[Event]Transition),
+func NewFSM[T any](initialState State) *FSM[T] {
+	fsm := &FSM[T]{
+		currentState: initialState,
 	}
+	fsm.RegisterState(initialState)
+	return fsm
 }
 
-// Register a transition from one state to another in response to an event.
-func (f *FSM) AddTransition(from State, to State, event Event, action ActionFunc) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	if f.transitions[from] == nil {
-		f.transitions[from] = make(map[Event]Transition)
+func (f *FSM[T]) RegisterState(state State) {
+	if f.states == nil {
+		f.states = make([]State, 0)
 	}
+	f.states = append(f.states, state)
+}
 
-	f.transitions[from][event] = Transition{
+func (f *FSM[T]) AddTransition(from, to State, event Event, actions []Action[T]) {
+	if f.transitions == nil {
+		f.transitions = make([]Transition[T], 0)
+	}
+	f.transitions = append(f.transitions, Transition[T]{
 		From:   from,
 		To:     to,
 		Event:  event,
-		Action: action,
-	}
+		Action: actions,
+	})
 }
 
 // Trigger attempts to transition the FSM to a new state based on the given event.
-// It locks the FSM to ensure thread safety, checks for a valid transition from the current state,
+// checks for a valid transition from the current state,
 // executes the associated action if any, and updates the FSM's state.
 //
 // Returns an error if no transition is registered for the current state or event, or if the action fails.
-func (f *FSM) Trigger(event Event, msg *message.DiameterMessage) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+func (f *FSM[T]) Trigger(ctx context.Context, event Event, args T) (T, error) {
+	var err error
+	var nextState State
+	var handlers []Action[T]
 
-	transitionForState, ok := f.transitions[f.state]
-	if !ok {
-		return errors.Join(errNoTransitionRegisteredForState, fmt.Errorf(" %d", f.state))
-	}
-
-	transition, ok := transitionForState[event]
-	if !ok {
-		return errors.Join(
-			errNoTransitionRegisteredForState,
-			fmt.Errorf(" %d with event %d", f.state, event),
-		)
-	}
-
-	// Execute the action associated with the transition.
-	if transition.Action != nil {
-		if err := transition.Action(msg); err != nil {
-			return err
+	for _, transition := range f.transitions {
+		if transition.From == f.currentState && transition.Event == event {
+			nextState = transition.To
+			handlers = transition.Action
+			break
 		}
 	}
 
-	f.state = transition.To
-	return nil
+	for _, handler := range handlers {
+		if handler.Fn == nil {
+			return args, errors.New(fmt.Sprintf("No handler found for event %s in state %s", event, f.currentState))
+		}
+		if args, err = handler.Fn(ctx, args); err != nil {
+			return args, err
+		}
+	}
+	f.currentState = nextState
+	return args, nil
 }
 
 // GetState returns the current state of the FSM.
 // It locks the FSM to ensure thread safety before accessing the state.
-func (f *FSM) GetState() State {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.state
+func (f *FSM[T]) GetState() State {
+	return f.currentState
 }
 
-func (f *FSM) SetState(s State) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.state = s
+func (f *FSM[T]) SetState(s State) {
+	f.currentState = s
 }
-
-// func (f *FSM) ShowTransitions() {
-// 	for from, events := range f.transitions {
-// 		for event, transition := range events {
-// 			log.Printf("From: %s, Event: %d, To: %s\n", stateNames[from], event, stateNames[transition.To])
-// 		}
-// 	}
-// }

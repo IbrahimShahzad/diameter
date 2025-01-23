@@ -1,4 +1,5 @@
 // Client state machine and event handling
+// FIXME: Fix client errors
 package client
 
 import (
