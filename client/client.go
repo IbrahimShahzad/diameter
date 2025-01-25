@@ -1,9 +1,9 @@
 // Client struct and methods for starting/stopping
-// FIXME: Fix client errors
 package client
 
 import (
-	"log"
+	"context"
+	"log/slog"
 	"time"
 
 	"github.com/IbrahimShahzad/diameter/message"
@@ -83,8 +83,9 @@ func WithMessageQueueSize(size int) ClientOptionsFunc {
 
 type Client struct {
 	ClientOptions
+	ctx          context.Context
 	conn         *transport.DiameterConnection
-	fsm          *fsm.FSM
+	fsm          *fsm.FSM[message.DiameterMessage]
 	EventChan    chan fsm.Event
 	messageQueue chan *message.DiameterMessage
 }
@@ -98,8 +99,9 @@ func NewClient(opts ...ClientOptionsFunc) (*Client, error) {
 		optFunc(&o)
 	}
 	return &Client{
+		ctx:           context.Background(),
 		conn:          nil,
-		fsm:           fsm.NewFSM(StateClosed),
+		fsm:           fsm.NewDiameterFSM(),
 		EventChan:     make(chan fsm.Event, o.eventBufferSize),
 		messageQueue:  make(chan *message.DiameterMessage, o.messageQueueSize),
 		ClientOptions: o,
@@ -107,43 +109,51 @@ func NewClient(opts ...ClientOptionsFunc) (*Client, error) {
 }
 
 func (c *Client) Connect() error {
-	log.Println("Connecting to server.")
+	slog.Info(
+		"Connecting to server.",
+		"serverAddr", c.serverAddr,
+		"protocol", c.protocol,
+		"connectionTimeout", c.connectionTimeout,
+	)
 	conn, err := transport.NewDiameterConnection(c.serverAddr, c.protocol, c.connectionTimeout)
 	if err != nil {
 		return err
 	}
-	c.fsm = fsm.NewFSM(StateClosed)
 	c.conn = conn
 
 	// Start event loop in the background
-	go c.Run()
+	c.ctx = context.WithValue(c.ctx, "peer", c.conn.RemoteAddr().String())
+	c.ctx = context.WithValue(c.ctx, "connection", c.conn)
+	c.fsm.Trigger(c.ctx, fsm.ISendConnReq, nil) // this will send CER message
 
-	c.EventChan <- EventStart
+	// now the client is in WAIT_CONN_ACK state
+	// wait for response
 
-	// diameter.CreateAVP(diameter.GetAVPCodeFromName("Result-Code"), uint32(2001), diameter.MANDATORY_FLAG), // Success
-	// the client sends a CER message to the server
-	originHost, err := message.NewAVP(message.AVP_ORIGIN_HOST, "client.example.com", message.MANDATORY_FLAG)
-	if err != nil {
-		log.Fatalf("Failed to create AVP: %v", err)
-	}
-	originRealm, err := message.NewAVP(message.AVP_ORIGIN_REALM, "example.com", message.MANDATORY_FLAG)
-	if err != nil {
-		log.Fatalf("Failed to create AVP: %v", err)
-	}
+	readBuf := make([]byte, 1024)
 
-	msgCER, err := message.NewCER(
-		originHost,
-		originRealm,
-	)
-	if err != nil {
-		log.Fatalf("Failed to create CER message: %v", err)
+	// wait for response
+	readBytes, err := c.conn.Read(readBuf)
+	if err != nil || readBytes == 0 {
+		// if the err is timeout, then we should trigger another event
+		if err.Error() == "i/o timeout" {
+			slog.Debug("Timeout while waiting for response")
+			c.fsm.Trigger(c.ctx, fsm.Timeout, nil)
+		} else {
+			slog.Error("Failed to read response", "err", err)
+			return err
+		}
 	}
-	log.Printf("Sending CER message: %v\n", msgCER)
-	resp, err := c.SendMessage(msgCER)
+	slog.Debug("Received response", "buffer", string(readBuf[:readBytes]))
+
+	msg, err := message.DecodeMessage(readBuf[:readBytes])
 	if err != nil {
-		log.Fatalf("Failed to send message: %v", err)
+		slog.Error("Failed to parse response", "err", err)
+		return err
 	}
-	log.Printf("Received response: %v", resp)
+	c.fsm.Trigger(c.ctx, fsm.RcvCEA, msg) // this will send CEA message
+
+	// clear buffer
+	readBuf = make([]byte, 1024)
 
 	return nil
 }
@@ -155,14 +165,14 @@ func (c *Client) SendMessage(msg *message.DiameterMessage) (*message.DiameterMes
 	readBuf := make([]byte, 1024)
 	readBytes, err := c.conn.Read(readBuf)
 	if err != nil || readBytes == 0 {
-		log.Printf("Failed to read response: %v", err)
+		slog.Error("Failed to read response", "err", err)
 		return nil, err
 	}
 	response, err := message.DecodeMessage(readBuf[:readBytes])
 	// create diameter message from response
 	// response, err := message.ParseDiameterMessage(readBuf[:readBytes])
 	if err != nil {
-		log.Printf("Failed to decode response: %v", err)
+		slog.Error("Failed to read response", "err", err)
 		return nil, err
 	}
 	return response, nil
@@ -170,39 +180,5 @@ func (c *Client) SendMessage(msg *message.DiameterMessage) (*message.DiameterMes
 
 // Disconnect cleanly disconnects from the server.
 func (c *Client) Disconnect() error {
-	c.EventChan <- EventDisconnect
 	return nil
-}
-
-// Run listens for and processes client events.
-func (c *Client) Run() {
-
-	readBuf := make([]byte, 1024)
-	for {
-		select {
-		case msg := <-c.messageQueue:
-			log.Printf("received message on queue: %v", msg)
-			if msg == nil {
-				return
-			}
-			bytes, err := msg.Encode()
-			if err != nil {
-				log.Printf("Failed to encode message: %v", err)
-				continue
-			}
-			c.conn.Write(bytes)
-			// wait for response
-			readBytes, err := c.conn.Read(readBuf)
-			if err != nil || readBytes == 0 {
-				log.Printf("Failed to read response: %v", err)
-				continue
-			}
-			log.Printf("Received response: %v", string(readBuf[:readBytes]))
-			// clear buffer
-			readBuf = make([]byte, 1024)
-		case event := <-c.EventChan:
-			log.Printf("received event: %v", event)
-			c.fsm.Trigger(event, nil)
-		}
-	}
 }

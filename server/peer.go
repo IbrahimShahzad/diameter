@@ -24,7 +24,7 @@ func (p *Peer) handleMessage(msg *message.DiameterMessage) []byte {
 		ctx := context.Background()
 		ctx = context.WithValue(ctx, "peer", p.conn.RemoteAddr().String())
 		ctx = context.WithValue(ctx, "connection", p.conn)
-		p.fsm.Trigger(ctx, fsm.RConnCER, *msg)
+		p.fsm.Trigger(ctx, fsm.RConnCER, msg)
 
 	case message.COMMAND_CODE_DWR:
 		// Handle DWR message
@@ -33,5 +33,4 @@ func (p *Peer) handleMessage(msg *message.DiameterMessage) []byte {
 		// Handle unknown message
 	}
 	return nil
-
 }

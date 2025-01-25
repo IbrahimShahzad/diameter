@@ -49,16 +49,43 @@ type Action[T any] struct {
 
 var SendConnReq = Action[message.DiameterMessage]{
 	Name: "SendConnReq",
-	Fn: func(ctx context.Context, args message.DiameterMessage) (message.DiameterMessage, error) {
+	Fn: func(ctx context.Context, args *message.DiameterMessage) (*message.DiameterMessage, error) {
 		// Code to send a CER message
-		return args, nil
+		sessionIDString := "1234567890"
+		originHostString := "client.example.com"
+		originRealmString := "example.com"
+
+		ctx = context.WithValue(ctx, message.AVP_SESSION_ID, sessionIDString)
+		sessionID, err := message.NewAVP(message.AVP_SESSION_ID, sessionIDString, message.MANDATORY_FLAG)
+		if err != nil {
+			return args, err
+		}
+
+		ctx = context.WithValue(ctx, message.AVP_ORIGIN_HOST, originHostString)
+		originHost, err := message.NewAVP(message.AVP_ORIGIN_HOST, originHostString, message.MANDATORY_FLAG)
+		if err != nil {
+			return args, err
+		}
+
+		ctx = context.WithValue(ctx, message.AVP_ORIGIN_REALM, originRealmString)
+		originRealm, err := message.NewAVP(message.AVP_ORIGIN_REALM, originRealmString, message.MANDATORY_FLAG)
+		if err != nil {
+			return args, err
+		}
+
+		return message.NewCER(
+			sessionID,
+			originHost,
+			originRealm,
+		)
+
 	},
 }
 
 // The incoming connection associated with the R-Conn-CER is accepted as the responder connection.
 var AcceptConn = Action[message.DiameterMessage]{
 	Name: "AcceptConn",
-	Fn: func(ctx context.Context, args message.DiameterMessage) (message.DiameterMessage, error) {
+	Fn: func(ctx context.Context, args *message.DiameterMessage) (*message.DiameterMessage, error) {
 		slog.Info("Accepted Connection")
 		return args, nil
 	},
@@ -67,7 +94,7 @@ var AcceptConn = Action[message.DiameterMessage]{
 // The incoming connection associated with the R-Conn-CER is disconnected.
 var RejectConn = Action[message.DiameterMessage]{
 	Name: "RejectConn",
-	Fn: func(ctx context.Context, args message.DiameterMessage) (message.DiameterMessage, error) {
+	Fn: func(ctx context.Context, args *message.DiameterMessage) (*message.DiameterMessage, error) {
 		// Code to reject the connection
 		return args, nil
 	},
@@ -76,7 +103,7 @@ var RejectConn = Action[message.DiameterMessage]{
 // The CER associated with the R-Conn-CER is processed.
 var ProcessCER = Action[message.DiameterMessage]{
 	Name: "ProcessCER",
-	Fn: func(ctx context.Context, args message.DiameterMessage) (message.DiameterMessage, error) {
+	Fn: func(ctx context.Context, args *message.DiameterMessage) (*message.DiameterMessage, error) {
 		// Code to process the CER
 		peerAddr := ctx.Value("peer")
 		slog.Info("Processing CER", "peer", peerAddr)
@@ -87,7 +114,7 @@ var ProcessCER = Action[message.DiameterMessage]{
 // A CER message is sent to the peer.
 var SendConnAck = Action[message.DiameterMessage]{
 	Name: "SendConnAck",
-	Fn: func(ctx context.Context, args message.DiameterMessage) (message.DiameterMessage, error) {
+	Fn: func(ctx context.Context, args *message.DiameterMessage) (*message.DiameterMessage, error) {
 		// Code to send a CER message
 		return args, nil
 	},
@@ -96,7 +123,7 @@ var SendConnAck = Action[message.DiameterMessage]{
 // A CEA message is sent to the peer.
 var SendCEA = Action[message.DiameterMessage]{
 	Name: "SendCEA",
-	Fn: func(ctx context.Context, args message.DiameterMessage) (message.DiameterMessage, error) {
+	Fn: func(ctx context.Context, args *message.DiameterMessage) (*message.DiameterMessage, error) {
 		// Code to send a CEA message
 		resultAVP, err := message.NewAVP(message.AVP_RESULT_CODE, uint32(2001), message.MANDATORY_FLAG)
 		if err != nil {
@@ -128,26 +155,20 @@ var SendCEA = Action[message.DiameterMessage]{
 			return args, err
 		}
 
-		cea, err := message.NewResponseFromRequest(&args,
+		slog.Debug("Sending Capabilities-Exchange-Answer (CEA) in response to CER.")
+		return message.NewResponseFromRequest(args,
 			resultAVP,
 			orignHostAVP,
 			orignRealmAVP,
 			vendorIDAVP,
 			productNameAVP)
-		if err != nil {
-			slog.Debug("Error creating CEA", "error", err)
-			return args, err
-		}
-
-		slog.Debug("Sending Capabilities-Exchange-Answer (CEA) in response to CER.")
-		return *cea, nil
 	},
 }
 
 // If necessary, the connection is shut down, and any local resources are freed.
 var Cleanup = Action[message.DiameterMessage]{
 	Name: "Cleanup",
-	Fn: func(ctx context.Context, args message.DiameterMessage) (message.DiameterMessage, error) {
+	Fn: func(ctx context.Context, args *message.DiameterMessage) (*message.DiameterMessage, error) {
 		// Code to clean up resources
 		return args, nil
 	},
@@ -156,7 +177,7 @@ var Cleanup = Action[message.DiameterMessage]{
 // The transport layer connection is disconnected
 var DiameterError = Action[message.DiameterMessage]{
 	Name: "DiameterError",
-	Fn: func(ctx context.Context, args message.DiameterMessage) (message.DiameterMessage, error) {
+	Fn: func(ctx context.Context, args *message.DiameterMessage) (*message.DiameterMessage, error) {
 		// Code to handle an error
 		return args, nil
 	},
@@ -165,8 +186,28 @@ var DiameterError = Action[message.DiameterMessage]{
 // A received CEA is processed.
 var ProcessCEA = Action[message.DiameterMessage]{
 	Name: "ProcessCEA",
-	Fn: func(ctx context.Context, args message.DiameterMessage) (message.DiameterMessage, error) {
+	Fn: func(ctx context.Context, args *message.DiameterMessage) (*message.DiameterMessage, error) {
 		// Code to process a CEA message
+		slog.Info("Processing CEA message.")
+		resultCode, _, err := message.GetResultCode(args)
+		if err != nil {
+			slog.Error("Error getting Result-Code", "error", err)
+			return args, err
+		}
+		slog.Info("Result-Code", "code", resultCode)
+
+		// TODO:
+		// sessionIDorig := ctx.Value(message.AVP_SESSION_ID)
+		// match session ID
+		// sessionID, _, err := message.GetSessionID(args)
+		// if err != nil {
+		// 	slog.Error("Error getting Session-ID", "error", err)
+		// 	return args, err
+		// }
+		// if sessionID != sessionIDorig {
+		//	slog.Error("Session-ID mismatch", "sessionID", sessionID, "expected", sessionIDorig)
+		//	return args, fmt.Errorf("Session-ID mismatch")
+		// }
 		return args, nil
 	},
 }
@@ -174,7 +215,7 @@ var ProcessCEA = Action[message.DiameterMessage]{
 // A DPR message is sent to the peer.
 var SendDPR = Action[message.DiameterMessage]{
 	Name: "SendDPR",
-	Fn: func(ctx context.Context, args message.DiameterMessage) (message.DiameterMessage, error) {
+	Fn: func(ctx context.Context, args *message.DiameterMessage) (*message.DiameterMessage, error) {
 		// Code to send a DPR message
 		return args, nil
 	},
@@ -183,7 +224,7 @@ var SendDPR = Action[message.DiameterMessage]{
 // A DPA message is sent to the peer.
 var SendDPA = Action[message.DiameterMessage]{
 	Name: "SendDPA",
-	Fn: func(ctx context.Context, args message.DiameterMessage) (message.DiameterMessage, error) {
+	Fn: func(ctx context.Context, args *message.DiameterMessage) (*message.DiameterMessage, error) {
 		// Code to send a DPA message
 		return args, nil
 	},
@@ -192,7 +233,7 @@ var SendDPA = Action[message.DiameterMessage]{
 // The transport layer connection is disconnected, and local resources are freed.
 var Disconnect = Action[message.DiameterMessage]{
 	Name: "Disconnect",
-	Fn: func(ctx context.Context, args message.DiameterMessage) (message.DiameterMessage, error) {
+	Fn: func(ctx context.Context, args *message.DiameterMessage) (*message.DiameterMessage, error) {
 		// Code to disconnect the connection
 		return args, nil
 	},
@@ -201,7 +242,7 @@ var Disconnect = Action[message.DiameterMessage]{
 // An election occurs
 var Election = Action[message.DiameterMessage]{
 	Name: "Election",
-	Fn: func(ctx context.Context, args message.DiameterMessage) (message.DiameterMessage, error) {
+	Fn: func(ctx context.Context, args *message.DiameterMessage) (*message.DiameterMessage, error) {
 		// Code to handle an election
 		return args, nil
 	},
@@ -210,7 +251,7 @@ var Election = Action[message.DiameterMessage]{
 // A message is sent.
 var SendDiameterMessage = Action[message.DiameterMessage]{
 	Name: "SendMessage",
-	Fn: func(ctx context.Context, args message.DiameterMessage) (message.DiameterMessage, error) {
+	Fn: func(ctx context.Context, args *message.DiameterMessage) (*message.DiameterMessage, error) {
 		// Code to send a message
 		conn := ctx.Value("connection").(*transport.DiameterConnection)
 		slog.Info("Sending Diameter message.")
@@ -231,7 +272,7 @@ var SendDiameterMessage = Action[message.DiameterMessage]{
 // A DWR message is sent.
 var SendDWR = Action[message.DiameterMessage]{
 	Name: "SendDWR",
-	Fn: func(ctx context.Context, args message.DiameterMessage) (message.DiameterMessage, error) {
+	Fn: func(ctx context.Context, args *message.DiameterMessage) (*message.DiameterMessage, error) {
 		// Code to send a DWR message
 		return args, nil
 	},
@@ -240,7 +281,7 @@ var SendDWR = Action[message.DiameterMessage]{
 // A DWA message is sent.
 var SendDWA = Action[message.DiameterMessage]{
 	Name: "SendDWA",
-	Fn: func(ctx context.Context, args message.DiameterMessage) (message.DiameterMessage, error) {
+	Fn: func(ctx context.Context, args *message.DiameterMessage) (*message.DiameterMessage, error) {
 		// Code to send a DWA message
 		return args, nil
 	},
@@ -249,7 +290,7 @@ var SendDWA = Action[message.DiameterMessage]{
 // The DWR message is serviced.
 var ProcessDWR = Action[message.DiameterMessage]{
 	Name: "ProcessDWR",
-	Fn: func(ctx context.Context, args message.DiameterMessage) (message.DiameterMessage, error) {
+	Fn: func(ctx context.Context, args *message.DiameterMessage) (*message.DiameterMessage, error) {
 		// Code to process a DWR message
 		return args, nil
 	},
@@ -258,7 +299,7 @@ var ProcessDWR = Action[message.DiameterMessage]{
 // The DWA message is serviced.
 var ProcessDWA = Action[message.DiameterMessage]{
 	Name: "ProcessDWA",
-	Fn: func(ctx context.Context, args message.DiameterMessage) (message.DiameterMessage, error) {
+	Fn: func(ctx context.Context, args *message.DiameterMessage) (*message.DiameterMessage, error) {
 		// Code to process a DWA message
 		return args, nil
 	},
@@ -267,7 +308,7 @@ var ProcessDWA = Action[message.DiameterMessage]{
 // A message is serviced.
 var ProcessMessage = Action[message.DiameterMessage]{
 	Name: "ProcessMessage",
-	Fn: func(ctx context.Context, args message.DiameterMessage) (message.DiameterMessage, error) {
+	Fn: func(ctx context.Context, args *message.DiameterMessage) (*message.DiameterMessage, error) {
 		// Code to process a DWR message
 		return args, nil
 	},
@@ -332,7 +373,10 @@ func NewDiameterFSM() *FSM[message.DiameterMessage] {
 	// Starts from Closed state.
 	// If an I-Snd-Conn-Req event occurs, it moves to Wait-Conn-Ack.
 	// If a R-Conn-CER event occurs (incoming connection), it transitions to R-Open.
-	fsm.AddTransition(Closed, WaitConnectionAck, ISendConnReq, []Action[message.DiameterMessage]{SendConnReq})
+	fsm.AddTransition(Closed, WaitICEA, ISendConnReq, []Action[message.DiameterMessage]{
+		SendConnReq,
+		SendDiameterMessage,
+	})
 	fsm.AddTransition(Closed, ROpen, RConnCER, []Action[message.DiameterMessage]{
 		AcceptConn,
 		ProcessCER,
@@ -344,7 +388,10 @@ func NewDiameterFSM() *FSM[message.DiameterMessage] {
 	// Awaits acknowledgment after initiating a connection.
 	// On receiving I-Rcv-Conn-Ack, it transitions to Wait-I-CEA.
 	// If a timeout occurs, it returns to Closed.
-	fsm.AddTransition(WaitConnectionAck, WaitICEA, RcvConnAck, []Action[message.DiameterMessage]{SendCEA})
+	fsm.AddTransition(WaitConnectionAck, WaitICEA, RcvConnAck, []Action[message.DiameterMessage]{
+		SendCEA,
+		SendDiameterMessage,
+	})
 	fsm.AddTransition(WaitConnectionAck, Closed, Timeout, []Action[message.DiameterMessage]{DiameterError})
 
 	// Wait-I-CEA State:

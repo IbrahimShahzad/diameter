@@ -14,7 +14,7 @@ type State string
 type Event string
 
 // type ActionFunc func(msg *message.DiameterMessage) error
-type ActionFunc[T any] func(ctx context.Context, args T) (T, error)
+type ActionFunc[T any] func(ctx context.Context, args *T) (*T, error)
 
 type Transition[T any] struct {
 	From   State
@@ -62,7 +62,7 @@ func (f *FSM[T]) AddTransition(from, to State, event Event, actions []Action[T])
 // executes the associated action if any, and updates the FSM's state.
 //
 // Returns an error if no transition is registered for the current state or event, or if the action fails.
-func (f *FSM[T]) Trigger(ctx context.Context, event Event, args T) (T, error) {
+func (f *FSM[T]) Trigger(ctx context.Context, event Event, args *T) (*T, error) {
 	var err error
 	var nextState State
 	var handlers []Action[T]
